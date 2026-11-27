@@ -9,7 +9,7 @@ async def create_document(
         file_path:str
 ) -> asyncpg.Record:
 
-    pool = get_pool()
+    pool = await get_pool()
 
     query = """
         INSERT INTO documents (
@@ -37,8 +37,8 @@ async def create_document(
         return document
 
 async def get_document_by_id(document_id:UUID)->asyncpg.Record | None:
-    
-    pool = get_pool()
+
+    pool = await get_pool()
 
     query = """
         SELECT
@@ -59,3 +59,30 @@ async def get_document_by_id(document_id:UUID)->asyncpg.Record | None:
 
         return document
 
+async def update_document_status(
+    document_id: UUID,
+    status: str,
+    error_message: str | None = None,
+) -> asyncpg.Record | None:
+
+    pool = await get_pool()
+
+    query = """
+        UPDATE documents
+        SET
+            status = $2,
+            error_message = $3,
+            updated_at = NOW()
+        WHERE id = $1
+        RETURNING id, status, error_message;
+    """
+
+    async with pool.acquire() as connection:
+        document = await connection.fetchrow(
+            query,
+            document_id,
+            status,
+            error_message,
+        )
+
+        return document

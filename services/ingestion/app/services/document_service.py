@@ -5,6 +5,7 @@ from uuid import uuid4
 from uuid import UUID
 
 from shared.exceptions import DocumentNotFoundError
+from services.ingestion.app.workers.tasks.document_tasks import process_document
 
 from services.ingestion.app.repositories.document_repository import (
     get_document_by_id,
@@ -71,6 +72,8 @@ async def upload_document(file:UploadFile):
             filename=Path(file.filename).name,
             file_path=str(file_path),
         )
+
+        process_document.delay(str(document["id"]))
 
         return document
 
