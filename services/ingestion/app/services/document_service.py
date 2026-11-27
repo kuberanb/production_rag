@@ -8,10 +8,13 @@ from shared.exceptions import DocumentNotFoundError
 from services.ingestion.app.workers.tasks.document_tasks import process_document
 
 from services.ingestion.app.repositories.document_repository import (
+    create_document,
     get_document_by_id,
+    delete_document_by_id,
 )
 
-
+import asyncio
+import logging
 import aiofiles
 
 from fastapi import UploadFile
@@ -19,6 +22,8 @@ from shared.config import settings
 from shared.exceptions import InvalidFileError
 
 from services.ingestion.app.repositories.document_repository import create_document
+
+logger = logging.getLogger(__name__)
 
 async def upload_document(file:UploadFile):
 
@@ -93,3 +98,52 @@ async def get_document_status(document_id:UUID):
         raise DocumentNotFoundError()
 
     return document
+
+
+async def delete_document(document_id: UUID):
+
+    # Check whether the document exists.
+    document = await get_document_by_id(document_id)
+
+    if document is None:
+        raise DocumentNotFoundError()
+
+    # Prevent deletion while ingestion is running.
+    if document["status"] == "processing":
+        raise ValueError(
+            "Cannot delete a document while it is processing"
+        )
+
+    # Delete the database record and associated chunks.
+    deleted_document = await delete_document_by_id(document_id)
+
+    if deleted_document is None:
+        raise ValueError(
+            "Document could not be deleted. It may have started processing."
+        )
+
+    # Delete the physical PDF file.
+    file_path = Path(deleted_document["file_path"])
+
+    file_cleanup_success = True
+
+    try:
+        await asyncio.to_thread(
+            file_path.unlink,
+            missing_ok=True,
+        )
+
+    except OSError:
+        file_cleanup_success = False
+
+        logger.exception(
+            "Failed to delete PDF file: %s",
+            file_path,
+        )
+
+    return {
+        "id": str(deleted_document["id"]),
+        "filename": deleted_document["filename"],
+        "file_cleanup_success": file_cleanup_success,
+    }
+

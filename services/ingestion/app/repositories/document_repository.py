@@ -93,3 +93,30 @@ async def update_document_status(
         )
 
         return document
+
+
+async def delete_document_by_id(
+    document_id: UUID,
+) -> asyncpg.Record | None:
+
+    pool = await get_pool()
+
+    query = """
+        DELETE FROM documents
+        WHERE id = $1
+          AND status <> 'processing'
+        RETURNING
+            id,
+            filename,
+            file_path,
+            status;
+    """
+
+    async with pool.acquire() as connection:
+        document = await connection.fetchrow(
+            query,
+            document_id,
+        )
+
+        return document
+    
