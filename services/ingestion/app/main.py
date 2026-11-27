@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from shared.database import (connect_to_database,close_database_connection,get_pool)
 from shared.exceptions import RAGException
 from fastapi.responses import JSONResponse
+from services.ingestion.app.api.document import router as document_router
 
 @asynccontextmanager
 async def lifespan(app:FastAPI):
@@ -32,6 +33,8 @@ async def rag_exception_handler(request:Request,exc:RAGException,):
         status_code=exc.status_code,
         content={"detail": exc.message},
     )
+
+app.include_router(document_router)
 
 
 @app.get("/health")

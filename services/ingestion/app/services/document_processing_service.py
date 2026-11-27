@@ -15,6 +15,18 @@ from services.ingestion.app.repositories.document_repository import (
     update_document_status,
 )
 
+from services.ingestion.app.repositories.chunk_repsository import (
+    insert_document_chunks,
+)
+
+from services.ingestion.app.services.chunking_service import (
+    chunk_text,
+)
+
+from services.ingestion.app.services.embedding_service import (
+    generate_embedding as generate_embeddings,
+)
+
 
 async def extract_pdf_text(
     file_path: str
@@ -25,7 +37,6 @@ async def extract_pdf_text(
     """
 
     def extract():
-
         pages = []
 
         with fitz.open(file_path) as document:
@@ -39,7 +50,6 @@ async def extract_pdf_text(
                 document,
                 start=1
             ):
-
                 text = page.get_text(
                     "text",
                     sort=True
@@ -52,9 +62,7 @@ async def extract_pdf_text(
 
         return pages
 
-    extracted_pages = await asyncio.to_thread(
-        extract
-    )
+    extracted_pages = await asyncio.to_thread(extract)
 
     if not any(
         page["text"]
@@ -70,17 +78,21 @@ async def extract_pdf_text(
 
 async def process_document_async(
     document_id: str
-):
+) -> int:
     """
-    Process an uploaded document.
+    Process an uploaded PDF.
+
+    Extraction -> Chunking -> Embeddings -> Database insertion.
     """
 
-    await connect_to_database()
+    document_uuid = UUID(document_id)
+
+    database_connected = False
 
     try:
-
-        # 1. Convert document ID
-        document_uuid = UUID(document_id)
+        # 1. Connect to PostgreSQL
+        await connect_to_database()
+        database_connected = True
 
         # 2. Retrieve document
         document = await get_document_by_id(
@@ -92,63 +104,87 @@ async def process_document_async(
                 f"Document not found: {document_id}"
             )
 
-        # 3. Update document status
+        # 3. Update status
         await update_document_status(
             document_uuid,
             "processing",
+            error_message=None,
         )
 
-        # 4. Get stored PDF path from database
-        file_path = Path(
-            document["file_path"]
-        )
+        # 4. Validate PDF file
+        file_path = Path(document["file_path"])
 
         if not file_path.is_file():
             raise FileNotFoundError(
                 f"PDF file not found: {file_path}"
             )
 
-        # 5. Extract PDF text page by page
+        # 5. Extract PDF text
         extracted_pages = await extract_pdf_text(
             str(file_path)
         )
 
-        # 6. Calculate extraction statistics
-        total_pages = len(extracted_pages)
+        print(
+            f"Extracted text from "
+            f"{len(extracted_pages)} pages"
+        )
 
-        total_characters = sum(
-            len(page["text"])
-            for page in extracted_pages
+        # 6. Generate chunks
+        chunks = chunk_text(extracted_pages)
+
+        if not chunks:
+            raise ValueError(
+                "No chunks were generated from the PDF"
+            )
+
+        print(
+            f"Generated {len(chunks)} chunks"
+        )
+
+        # 7. Prepare chunk texts
+        texts = [
+            chunk["text"]
+            for chunk in chunks
+        ]
+
+        # 8. Generate embeddings
+        embeddings = await generate_embeddings(texts)
+
+        if len(embeddings) != len(chunks):
+            raise ValueError(
+                "Embedding count does not match chunk count"
+            )
+
+        print(
+            f"Generated {len(embeddings)} embeddings"
+        )
+
+        # 9. Insert chunks and embeddings
+        inserted_count = await insert_document_chunks(
+            document_uuid,
+            chunks,
+            embeddings,
+        )
+
+        # 10. Mark document as completed
+        await update_document_status(
+            document_uuid,
+            "completed",
+            error_message=None,
+            chunk_count=inserted_count,
         )
 
         print(
-            f"Document {document_id}: "
-            f"Extracted {total_characters} characters "
-            f"from {total_pages} pages"
+            f"Document {document_id} processed successfully. "
+            f"Inserted {inserted_count} chunks."
         )
 
-        # 7. Temporary extraction result
-        return extracted_pages
+        return inserted_count
 
-    except Exception as exc:
-
-        # Update document status when processing fails
-        try:
-            await update_document_status(
-                UUID(document_id),
-                "failed",
-                str(exc)[:1000],
-            )
-
-        except Exception as status_error:
-            print(
-                f"Failed to update document status: "
-                f"{status_error}"
-            )
-
+    except Exception:
+        # Let Celery handle retries and final failure status.
         raise
 
     finally:
-
-        # 8. Close worker database pool
-        await close_database_connection()
+        if database_connected:
+            await close_database_connection()

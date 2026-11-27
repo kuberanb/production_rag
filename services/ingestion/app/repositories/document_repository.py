@@ -63,6 +63,7 @@ async def update_document_status(
     document_id: UUID,
     status: str,
     error_message: str | None = None,
+    chunk_count: int | None = None,
 ) -> asyncpg.Record | None:
 
     pool = await get_pool()
@@ -72,9 +73,14 @@ async def update_document_status(
         SET
             status = $2,
             error_message = $3,
+            chunk_count = COALESCE($4, chunk_count),
             updated_at = NOW()
         WHERE id = $1
-        RETURNING id, status, error_message;
+        RETURNING
+            id,
+            status,
+            error_message,
+            chunk_count;
     """
 
     async with pool.acquire() as connection:
@@ -83,6 +89,7 @@ async def update_document_status(
             document_id,
             status,
             error_message,
+            chunk_count,
         )
 
         return document
